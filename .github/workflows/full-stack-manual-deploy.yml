@@ -3,10 +3,17 @@ name: Full Stack Manual Deploy
 on:
   workflow_dispatch:
 
+env:
+  AWS_REGION: eu-north-1
+  ROLE_TO_ASSUME: arn:aws:iam::750761632982:role/GitHubActions-Role
+  ECR_URI: 750761632982.dkr.ecr.eu-north-1.amazonaws.com/docker-compose-image
+  S3_BUCKET: edembak1
+  ECS_CLUSTER_NAME: your-cluster-name
+  ECS_SERVICE_NAME: your-service-name
+
 jobs:
   frontend:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -33,12 +40,11 @@ jobs:
       - name: Lint backend
         run: python -m py_compile backend/main.py
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: eu-north-1
+          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v1
@@ -46,15 +52,12 @@ jobs:
       - name: Build and push Docker image
         working-directory: ./backend
         run: |
-          IMAGE_TAG=latest
-          ECR_URI=750761632982.dkr.ecr.eu-north-1.amazonaws.com/docker-compose-image
-          docker build -t $ECR_URI:$IMAGE_TAG .
-          docker push $ECR_URI:$IMAGE_TAG
+          docker build -t $ECR_URI:latest .
+          docker push $ECR_URI:latest
 
   deploy-frontend:
     needs: backend
     runs-on: ubuntu-latest
-
     steps:
       - name: Download frontend artifact
         uses: actions/download-artifact@v4
@@ -62,26 +65,29 @@ jobs:
           name: static-site
           path: ./frontend
 
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
       - name: Deploy frontend to S3
         run: |
-          aws s3 sync ./frontend s3://edembak1 --delete
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: eu-north-1
+          aws s3 sync ./frontend s3://$S3_BUCKET --delete
 
   restart-ecs:
     needs: backend
     runs-on: ubuntu-latest
-
     steps:
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
       - name: Force new ECS deployment
         run: |
           aws ecs update-service \
-            --cluster your-cluster-name \
-            --service your-service-name \
+            --cluster $ECS_CLUSTER_NAME \
+            --service $ECS_SERVICE_NAME \
             --force-new-deployment
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: eu-north-1
