@@ -1,0 +1,87 @@
+name: Full Stack Manual Deploy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Upload frontend files as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: static-site
+          path: ./frontend
+
+  backend:
+    needs: frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Lint backend
+        run: python -m py_compile backend/main.py
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-north-1
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build and push Docker image
+        working-directory: ./backend
+        run: |
+          IMAGE_TAG=latest
+          ECR_URI=750761632982.dkr.ecr.eu-north-1.amazonaws.com/docker-compose-image
+          docker build -t $ECR_URI:$IMAGE_TAG .
+          docker push $ECR_URI:$IMAGE_TAG
+
+  deploy-frontend:
+    needs: backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: static-site
+          path: ./frontend
+
+      - name: Deploy frontend to S3
+        run: |
+          aws s3 sync ./frontend s3://edembak1 --delete
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: eu-north-1
+
+  restart-ecs:
+    needs: backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Force new ECS deployment
+        run: |
+          aws ecs update-service \
+            --cluster your-cluster-name \
+            --service your-service-name \
+            --force-new-deployment
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: eu-north-1
